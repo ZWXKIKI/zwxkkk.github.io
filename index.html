@@ -1,0 +1,720 @@
+<template>
+    <!-- Navigation Menu Section -->
+    <nav class="nav">
+        <div class="container-fluid py-2">
+            <ul class="nav justify-content-center">
+                <li class="nav-item">
+                    <a class="nav-link text-white" href="#" @click="gotohomepage">首页</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white" href="#" @click="checkLogin">个人中心</a>
+                </li>
+                <li class="nav-item" v-if="isUser">
+                    <a class="nav-link text-white" href="#" @click="goToBookList">图书库</a>
+                </li>
+                <li class="nav-item" v-if="isAdmin">
+                    <a class="nav-link text-white" href="#" @click="goToLendingManagement">借阅管理</a>
+                </li>
+                <li class="nav-item" v-if="isAdmin">
+                    <a class="nav-link text-white" href="#" @click="goToManager">图书管理</a>
+                </li>
+                <li class="nav-item position-relative" v-if="isUser">
+                    <a class="nav-link text-white" href="#" @click="goToMessages">
+                        消息
+                        <span v-if="unreadCount > 0" class="badge bg-danger position-absolute top-0 end-0">{{ unreadCount }}</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Content Section -->
+    <div class="container mt-5">
+        <h2 class="text-center mb-4">个人中心</h2>
+
+        <!-- 用户信息展示 -->
+        <div class="user-info border rounded p-4 mb-4">
+            <p><strong>用户名：</strong>{{ user.username }}</p>
+            <p><strong>ID：</strong>{{ user.userId }}</p>
+            <p><strong>角色：</strong>{{ user.role }}</p>
+            <p><strong>邮箱：</strong>{{ user.email }}</p>
+        </div>
+
+        <!-- 借阅卡信息展示 -->
+        <div v-if="libraryCard" class="library-card border rounded p-4">
+            <h4>借阅卡信息</h4>
+            <p><strong>卡号：</strong>{{ libraryCard.cardId }}</p>
+            <p><strong>信用分：</strong>{{ libraryCard.creditScore }}</p>
+            <p><strong>注册日期：</strong>{{ libraryCard.registrationDate }}</p>
+        </div>
+        <div v-else class="text-center">
+            <p class="text-danger">尚未创建借阅卡。</p>
+            <button @click="createLibraryCard" class="btn btn-primary">创建借阅卡</button>
+        </div>
+
+        <div v-if="borrowRecords.length > 0" class="borrow-records mt-4">
+            <h4>借阅记录(点击记录查看详情)</h4>
+            <p><strong>未归还图书数量：</strong>{{ unreturnedCount }}</p>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>书籍 ID</th>
+                        <th>书名</th>
+                        <th>借阅日期</th>
+                        <th>到期日期</th>
+                        <th>归还日期</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="record in borrowRecords" :key="record.id" @click="viewBookDetail(record.id)">
+                        <td>{{ record.id }}</td>
+                        <td>{{ record.bookTitle }}</td>
+                        <td>{{ new Date(record.borrowDate).toLocaleString() }}</td>
+                        <td>{{ new Date(record.dueDate).toLocaleString() }}</td>
+                        <td>{{ record.returnDate ? new Date(record.returnDate).toLocaleString() : '未归还' }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div v-else class="text-center mt-4" style="background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px;">
+            <p class="text-danger">暂无借阅记录。</p>
+        </div>
+
+        <!-- 用户消息小窗 -->
+        <div v-if="showUserMessageModal" class="modal" @click.self="closeUserMessageModal">
+            <div class="modal-content">
+                <h3>我的消息</h3>
+                <div v-if="messages.length === 0" class="no-messages">暂无消息</div>
+                <ul v-else class="list-group">
+                    <li
+                        v-for="msg in messages"
+                        :key="msg.mailId"
+                        class="list-group-item"
+                        :class="{ 'text-muted': msg.isRead }"
+                        @mouseenter="showTooltip(msg.mailId)"
+                        @mouseleave="hideTooltip()"
+                    >
+                        <div class="message-content">
+                            <p class="message-text">{{ msg.content }}</p>
+                            <p class="message-time"><small>{{ formatDate(msg.sendTime) }}</small></p>
+                        </div>
+                        <div v-if="tooltipId === msg.mailId" class="tooltip">
+                            {{ msg.content }}
+                        </div>
+                        <div class="button-group">
+                            <button
+                                v-if="!msg.isRead"
+                                @click.stop="markAsRead(msg.mailId)"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                标记已读
+                            </button>
+                            <button
+                                v-if="msg.isRead"
+                                @click.stop="markAsUnread(msg.mailId)"
+                                class="btn btn-sm btn-outline-secondary"
+                            >
+                                标记未读
+                            </button>
+                        </div>
+                    </li>
+                </ul>
+                <button @click="closeUserMessageModal" class="btn btn-secondary mt-3">关闭</button>
+            </div>
+        </div>
+
+        <!-- 退出登录按钮 -->
+        <button @click="logout" class="btn btn-danger mt-3 w-100">退出登录</button>
+    </div>
+</template>
+
+<script>
+import axios from 'axios';
+
+export default {
+    name: 'UserProfile',
+    computed: {
+        currentUser() {
+            const userJson = localStorage.getItem('user');
+            console.log('user 数据:', userJson);
+            const user = userJson ? JSON.parse(userJson) : null;
+            return user;
+        },
+        isAdmin() {
+            return this.currentUser?.role === 'Admin';
+        },
+        isUser() {
+            return this.currentUser?.role === 'User';
+        }
+    },
+    data() {
+        return {
+            user: {},
+            libraryCard: null,
+            borrowRecords: [],
+            unreturnedCount: 0,
+            showUserMessageModal: false,
+            messages: [],
+            unreadCount: 0,
+            tooltipId: null
+        };
+    },
+    created() {
+        const token = localStorage.getItem('token');
+        const userData = localStorage.getItem('user');
+        console.log('Token:', token);
+        console.log('UserData:', userData);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        if (userData) {
+            try {
+                this.user = JSON.parse(userData);
+                this.fetchUserMessages();
+                this.fetchLibraryCard();
+            } catch (e) {
+                console.error('Failed to parse user data:', e);
+                this.$router.push('/login');
+                return;
+            }
+        } else {
+            console.warn('No user data found, redirecting to login');
+            this.$router.push('/login');
+            return;
+        }
+
+        axios.interceptors.response.use(
+            response => response,
+            error => {
+                if (error.response && error.response.status === 401) {
+                    console.error('Token expired or unauthorized, redirecting to login');
+                    this.$router.push('/login');
+                }
+                return Promise.reject(error);
+            }
+        );
+    },
+    methods: {
+        async fetchUserMessages() {
+            try {
+                const response = await axios.get('/api/Mail/messages');
+                console.log('Messages response:', response.data);
+                this.messages = response.data.messages || [];
+                this.unreadCount = this.messages.filter(msg => !msg.isRead).length;
+                console.log('Messages:', this.messages);
+                console.log('Unread count:', this.unreadCount);
+            } catch (error) {
+                console.error('获取消息失败:', error);
+                this.messages = [];
+                this.unreadCount = 0;
+                if (error.response?.status === 401) {
+                    this.$router.push('/login');
+                }
+            }
+        },
+        async markAsRead(mailId) {
+            console.log('Marking message as read:', mailId);
+            try {
+                await axios.put(`/api/Mail/mark-read/${mailId}`);
+                console.log('Message marked as read:', mailId);
+                await this.fetchUserMessages();
+            } catch (error) {
+                console.error('标记已读失败:', error);
+                alert('标记已读失败，请稍后再试');
+            }
+        },
+        async markAsUnread(mailId) {
+            console.log('Marking message as unread:', mailId);
+            try {
+                await axios.put(`/api/Mail/mark-unread/${mailId}`);
+                console.log('Message marked as unread:', mailId);
+                await this.fetchUserMessages();
+            } catch (error) {
+                console.error('标记未读失败:', error);
+                alert('标记未读失败，请稍后再试');
+            }
+        },
+        formatDate(dateString) {
+            return new Date(dateString).toLocaleDateString();
+        },
+        closeUserMessageModal() {
+            this.showUserMessageModal = false;
+            this.tooltipId = null;
+        },
+        showTooltip(mailId) {
+            console.log('Show tooltip for mailId:', mailId);
+            this.tooltipId = mailId;
+        },
+        hideTooltip() {
+            console.log('Hide tooltip');
+            this.tooltipId = null;
+        },
+        viewBookDetail(bookId) {
+            this.$router.push(`/book/${bookId}`);
+        },
+        async fetchLibraryCard() {
+            try {
+                const response = await axios.get(`/api/librarycard/getcard/${this.user.userId}`);
+                this.libraryCard = response.data;
+                if (this.libraryCard) {
+                    this.fetchBorrowRecords();
+                }
+            } catch (error) {
+                if (error.response && error.response.status === 404) {
+                    this.libraryCard = null;
+                } else {
+                    console.error('获取借阅卡信息失败:', error);
+                }
+            }
+        },
+        async fetchBorrowRecords() {
+            try {
+                const response = await axios.get(`/api/borrowrecord/getrecords/${this.user.userId}`);
+                const { borrowRecords, unreturnedCount } = response.data;
+
+                this.borrowRecords = borrowRecords; // 注意大小写，确保属性名一致
+                this.unreturnedCount = unreturnedCount;
+                if (this.borrowRecords.length === 0 && this.unreturnedCount === 0) {
+                    alert('借阅记录为空！');
+                }
+            } catch (error) {
+                console.error('获取借阅记录失败:', error);
+                alert('获取借阅记录失败，请稍后再试');
+            }
+        },
+        async createLibraryCard() {
+            try {
+                const response = await axios.post('/api/librarycard/create', {
+                    UserId: this.user.userId,
+                });
+                if (response.status === 200) {
+                    this.libraryCard = response.data;
+                    alert('借阅卡创建成功！');
+                } else {
+                    alert('借阅卡创建失败！');
+                }
+            } catch (error) {
+                console.error('创建借阅卡时出错:', error);
+                alert('创建借阅卡失败，请稍后再试');
+            }
+        },
+        logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            this.$router.push('/homepage');
+        },
+        gotohomepage() {
+            this.$router.push('/homepage');
+        },
+        goToBookList() {
+            this.$router.push('/books');
+        },
+        goToMessages() {
+            this.showUserMessageModal = true;
+            this.fetchUserMessages();
+        },
+        goToLendingManagement() {
+            this.$router.push('/lending-management');
+        },
+        goToManager() {
+            this.$router.push('/manager');
+        },
+    }
+};
+</script>
+
+<style scoped>
+/* General Styling */
+* {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Navigation Bar */
+.nav {
+    background: #2d3748;
+    position: fixed;
+    top: 0;
+    width: 100%;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.nav-item .nav-link {
+    color: #e2e8f0;
+    font-size: 1rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.nav-item .nav-link:hover {
+    color: #90cdf4;
+}
+
+/* Badge */
+.badge {
+    font-size: 0.75rem;
+    padding: 0.25em 0.4em;
+    background: #e53e3e;
+    color: #fff;
+    border-radius: 0.25rem;
+}
+
+/* Main Content Container */
+.container {
+    margin-top: 60px;
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    padding: 1.5rem;
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Page Title */
+.text-center.mb-4 {
+    font-size: 1.875rem;
+    font-weight: 600;
+    color: #2d3748;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+/* User Info Section */
+.user-info {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.user-info p {
+    font-size: 0.875rem;
+    color: #4a5568;
+    margin-bottom: 0.5rem;
+}
+
+.user-info p strong {
+    font-weight: 500;
+    color: #2d3748;
+}
+
+/* Library Card Section */
+.library-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.library-card h4 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: #2d3748;
+    margin-bottom: 1rem;
+}
+
+.library-card p {
+    font-size: 0.875rem;
+    color: #4a5568;
+    margin-bottom: 0.5rem;
+}
+
+.library-card p strong {
+    font-weight: 500;
+    color: #2d3748;
+}
+
+/* No Library Card Message */
+.text-center .text-danger {
+    font-size: 0.875rem;
+    color: #e53e3e;
+    margin-bottom: 1rem;
+}
+
+/* Buttons */
+.btn-primary {
+    padding: 0.5rem 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #fff;
+    background: #3182ce;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.btn-primary:hover {
+    background: #2b6cb0;
+    transform: translateY(-1px);
+}
+
+.btn-danger {
+    padding: 0.5rem 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #fff;
+    background: #e53e3e;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.btn-danger:hover {
+    background: #c53030;
+    transform: translateY(-1px);
+}
+
+.btn-secondary {
+    padding: 0.5rem 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #fff;
+    background: #718096;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.btn-secondary:hover {
+    background: #5a667a;
+    transform: translateY(-1px);
+}
+
+.btn-outline-primary {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    color: #3182ce;
+    background: transparent;
+    border: 1px solid #3182ce;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.btn-outline-primary:hover {
+    background: #e6f3ff;
+    transform: translateY(-1px);
+}
+
+.btn-outline-secondary {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    color: #718096;
+    background: transparent;
+    border: 1px solid #718096;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.btn-outline-secondary:hover {
+    background: #edf2f7;
+    transform: translateY(-1px);
+}
+
+/* Borrow Records Section */
+.borrow-records {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.borrow-records h4 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: #2d3748;
+    margin-bottom: 1rem;
+}
+
+.borrow-records p {
+    font-size: 0.875rem;
+    color: #4a5568;
+    margin-bottom: 0.5rem;
+}
+
+.borrow-records p strong {
+    font-weight: 500;
+    color: #2d3748;
+}
+
+/* Table */
+.table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.table th {
+    padding: 0.75rem 1.5rem;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #718096;
+    text-transform: uppercase;
+    background: #edf2f7;
+}
+
+.table td {
+    padding: 1rem 1.5rem;
+    font-size: 0.875rem;
+    color: #4a5568;
+    border-top: 1px solid #e2e8f0;
+}
+
+.table tr {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.table tr:hover {
+    background: #f7fafc;
+}
+
+/* No Borrow Records Message */
+.text-center.mt-4 {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    padding: 1.5rem;
+    text-align: center;
+    margin-top: 1.5rem;
+}
+
+.text-center.mt-4 p.text-danger {
+    font-size: 1.25rem;
+    color: #e53e3e;
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+}
+
+.modal-content {
+    background: #fff;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-content h3 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: #2d3748;
+    margin-bottom: 1rem;
+}
+
+/* 暂无消息样式 */
+.no-messages {
+    font-size: 0.875rem;
+    color: #4a5568;
+    text-align: center;
+    padding: 1rem;
+}
+
+/* 消息列表样式 */
+.list-group {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    margin-bottom: 1rem;
+}
+
+.list-group-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.875rem;
+    color: #4a5568;
+    border: none;
+    border-bottom: 1px solid #e2e8f0;
+    position: relative;
+    height: 60px;
+    transition: background 0.2s;
+    cursor: pointer;
+}
+
+.list-group-item:last-child {
+    border-bottom: none;
+}
+
+.list-group-item:hover {
+    background: #f7fafc;
+}
+
+.list-group-item.text-muted {
+    color: #718096;
+}
+
+/* 消息内容容器 */
+.message-content {
+    flex: 1;
+    overflow: hidden;
+}
+
+/* 消息文本样式 */
+.message-text {
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+}
+
+/* 消息时间样式 */
+.message-time {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #718096;
+}
+
+/* 按钮组样式 */
+.button-group {
+    display: flex;
+    gap: 0.5rem; /* 按钮之间的间距 */
+}
+
+/* 悬浮窗样式 */
+.tooltip {  
+    position: absolute;
+    top: 100%;
+    right: 10rem;
+    background: #2d3748;
+    color: #e2e8f0;
+    padding: 0.75rem;
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 2100;
+    max-width: 400px;
+    word-wrap: break-word;
+    opacity: 1;
+    transition: opacity 0.2s ease-in-out;
+}
+</style>
